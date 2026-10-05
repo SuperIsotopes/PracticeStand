@@ -106,12 +106,16 @@ input[type=range] { accent-color: var(--accent); width: 96px; }
 main { max-width: 1180px; margin: 0 auto; padding-block: 22px calc(var(--kb-h) + 40px); padding-inline: 16px; }
 .paper { background: var(--paper); border: 1px solid var(--paper-edge); border-radius: 4px; box-shadow: 0 1px 0 var(--paper-edge), 0 18px 40px -28px rgba(0,0,0,.45); padding: 10px 6px 30px; position: relative; min-height: 60vh; overflow-x: auto; }
 #osmd { color: #000; }
+#osmd .nn { font: 600 9px "IBM Plex Sans", system-ui, sans-serif; fill: #2b50c0; stroke: #fffefb; stroke-width: 2.6px; stroke-linejoin: round; paint-order: stroke; pointer-events: none; }
 .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #5d6570; font-family: var(--font-display); font-style: italic; font-size: 1.2rem; }
 .piece-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 0 0 12px; color: var(--muted); font-size: .82rem; }
 .piece-meta b { color: var(--fg); font-weight: 600; }
 .piece-meta .credit { font-size: .75rem; font-style: italic; }
 .chip { font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
 .help { margin-top: 18px; color: var(--muted); font-size: .85rem; max-width: 70ch; }
+.site-foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
+.site-foot a { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.site-foot a:hover { text-decoration-thickness: 2px; }
 .help h2 { font-family: var(--font-display); color: var(--fg); font-weight: 500; font-size: 1.15rem; margin: 0 0 6px; }
 .help p { margin: 0 0 8px; }
 kbd { font-family: var(--font-mono); font-size: .78rem; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--rail); }
@@ -190,6 +194,7 @@ kbd { font-family: var(--font-mono); font-size: .78rem; border: 1px solid var(--
       <label class="field" for="sens"><span class="label">Mic sensitivity</span><small class="sens-end">Less</small><input id="sens" type="range" min="1" max="10" value="6"><small class="sens-end">More</small></label>
       <label class="check"><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
       <label class="check"><input type="checkbox" id="octave"> Forgive octave slips</label>
+      <label class="check"><input type="checkbox" id="names"> Note names</label>
       <div class="field">
         <button class="btn" id="zoomOut" type="button" aria-label="Smaller score">−</button>
         <button class="btn" id="zoomIn" type="button" aria-label="Larger score">+</button>
@@ -232,6 +237,7 @@ kbd { font-family: var(--font-mono); font-size: .78rem; border: 1px solid var(--
     <p>Turn on <b>Microphone</b> to listen to an acoustic or digital piano in a quiet room, or <b>MIDI keyboard</b> for a USB keyboard (most precise). The keys below light up with what to play, and you can click them or use your computer keyboard: <kbd>A</kbd>–<kbd>K</kbd> for white keys, <kbd>W</kbd> <kbd>E</kbd> <kbd>T</kbd> <kbd>Y</kbd> <kbd>U</kbd> for black keys, <kbd>Z</kbd>/<kbd>X</kbd> to shift octaves.</p>
     <p>Want a different piece? Choose <b>Open score…</b> and load any MusicXML file, for example one exported from MuseScore.</p>
   </section>
+  <footer class="site-foot">Created by <a href="https://github.com/SuperIsotopes" target="_blank" rel="noopener">SuperIsotopes</a></footer>
 </main>
 
 <div class="kb" aria-label="Piano keyboard">
@@ -334,6 +340,7 @@ const PIECES = [{"id": "prelude", "title": "Prelude in C major, BWV 846", "compo
       await S.osmd.load(content);
       S.osmd.zoom = S.zoom;
       S.osmd.render();
+      drawNoteNames();
     } catch (e) {
       $("loading").textContent = "This file could not be read as MusicXML.";
       notice("That score could not be opened. Use an uncompressed .musicxml/.xml or a .mxl file exported from a notation app.", true);
@@ -410,7 +417,7 @@ const PIECES = [{"id": "prelude", "title": "Prelude in C major, BWV 846", "compo
   /* ================= practice flow ================= */
   function restart(fresh) {
     if (!S.osmd) return;
-    if (!fresh) { S.osmd.render(); S.cursor = S.osmd.cursor; }
+    if (!fresh) { S.osmd.render(); drawNoteNames(); S.cursor = S.osmd.cursor; }
     S.colored = [];
     S.correct = 0; S.wrong = 0; S.started = 0; S.finished = false;
     S.events = [];
@@ -477,6 +484,107 @@ const PIECES = [{"id": "prelude", "title": "Prelude in C major, BWV 846", "compo
     S.expected = collectExpected().exp;
     S.matched = new Set();
     updateStatus(); paintKeyboard(); followCursor();
+  }
+
+  /* ---------- letter names above the notes ---------- */
+  const LETTER = { 0: "C", 2: "D", 4: "E", 5: "F", 7: "G", 9: "A", 11: "B" };
+  const ACC = { "-2": "♭♭", "-1": "♭", "0": "", "1": "♯", "2": "♯♯" };
+  function spell(n) {
+    const h = halfToneOf(n);
+    if (h == null) return null;
+    const midi = h + S.offset;
+    const pc = n.Pitch && typeof n.Pitch.FundamentalNote === "number" ? n.Pitch.FundamentalNote : null;
+    if (pc == null || !(pc in LETTER)) return { midi, text: NAMES[((midi % 12) + 12) % 12] };
+    const alter = ((((midi % 12) - pc + 18) % 12) + 12) % 12 - 6;   // the score's own spelling
+    return { midi, text: LETTER[pc] + (ACC[String(alter)] ?? "") };
+  }
+  function drawNoteNames() {
+    document.querySelectorAll("#osmd .nn").forEach((e) => e.remove());
+    if (!$("names").checked || !S.osmd || !S.osmd.GraphicSheet) return;
+    const groups = new Map();
+    (S.osmd.GraphicSheet.MeasureList || []).forEach((row) => (row || []).forEach((gm) => {
+      if (!gm) return;
+      (gm.staffEntries || []).forEach((se) => (se.graphicalVoiceEntries || []).forEach((gve) => (gve.notes || []).forEach((gn) => {
+        const n = gn.sourceNote;
+        if (!n || isRest(n) || isTieContinuation(n) || isGrace(n)) return;
+        let el = null;
+        try { el = gn.getSVGGElement && gn.getSVGGElement(); } catch (e) { el = null; }
+        if (!el || !el.ownerSVGElement) return;
+        const sp = spell(n);
+        if (!sp) return;
+        if (!groups.has(el)) groups.set(el, []);
+        const arr = groups.get(el);
+        if (!arr.some((x) => x.midi === sp.midi)) arr.push(sp);
+      })));
+    }));
+    const NS = "http://www.w3.org/2000/svg", LH = 9.5, CW = 5.8, PAD = 1.5, CELL = 40;
+    // Obstacles per page: every note group and beam, plus each label once it is placed.
+    const pages = new Map();
+    const pageOf = (svg) => {
+      if (pages.has(svg)) return pages.get(svg);
+      const grid = new Map();
+      const add = (r) => {
+        for (let gx = Math.floor(r.x0 / CELL); gx <= Math.floor(r.x1 / CELL); gx++)
+          for (let gy = Math.floor(r.y0 / CELL); gy <= Math.floor(r.y1 / CELL); gy++) {
+            const k = gx + "," + gy;
+            if (!grid.has(k)) grid.set(k, []);
+            grid.get(k).push(r);
+          }
+      };
+      const hits = (r, self) => {
+        for (let gx = Math.floor(r.x0 / CELL); gx <= Math.floor(r.x1 / CELL); gx++)
+          for (let gy = Math.floor(r.y0 / CELL); gy <= Math.floor(r.y1 / CELL); gy++) {
+            const list = grid.get(gx + "," + gy);
+            if (list) for (const o of list) if (o.el !== self && r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0) return true;
+          }
+        return false;
+      };
+      svg.querySelectorAll("g.vf-stavenote, g.vf-beam, g.vf-notehead").forEach((g) => {
+        try { const bb = g.getBBox(); if (bb.width || bb.height) add({ x0: bb.x, y0: bb.y, x1: bb.x + bb.width, y1: bb.y + bb.height, el: g.closest("g.vf-stavenote") || g }); } catch (e) {}
+      });
+      const page = { add, hits, seeded: grid.size > 0 };
+      pages.set(svg, page);
+      return page;
+    };
+    const items = [];
+    groups.forEach((arr, el) => {
+      let bb;
+      try { bb = el.getBBox(); } catch (e) { return; }
+      let cx = bb.x + bb.width / 2;
+      const head = el.querySelector(".vf-notehead");
+      if (head) { try { const hb = head.getBBox(); if (hb.width) cx = hb.x + hb.width / 2; } catch (e) {} }
+      arr.sort((p, q) => q.midi - p.midi);
+      items.push({ el, bb, cx, arr });
+    });
+    // Seed obstacles from our own note groups if the engine's class names differ.
+    items.forEach((it) => {
+      const page = pageOf(it.el.ownerSVGElement);
+      if (!page.seeded) page.add({ x0: it.bb.x, y0: it.bb.y, x1: it.bb.x + it.bb.width, y1: it.bb.y + it.bb.height, el: it.el });
+    });
+    items.sort((p, q) => p.cx - q.cx);
+    items.forEach(({ el, bb, cx, arr }) => {
+      const page = pageOf(el.ownerSVGElement);
+      const w = Math.max(...arr.map((sp) => sp.text.length)) * CW + PAD * 2;
+      const h = arr.length * LH + PAD;
+      const box = (top) => ({ x0: cx - w / 2, x1: cx + w / 2, y0: top, y1: top + h });
+      // Try just above the note, then higher, then just below, then lower.
+      const tries = [];
+      for (let k = 0; k < 6; k++) tries.push(bb.y - 3 - h - k * 5);
+      for (let k = 0; k < 6; k++) tries.push(bb.y + bb.height + 3 + k * 5);
+      let top = tries[0];
+      for (const tTop of tries) { if (!page.hits(box(tTop), el)) { top = tTop; break; } }
+      page.add(Object.assign(box(top), { el: null }));
+      const text = document.createElementNS(NS, "text");
+      text.setAttribute("class", "nn");
+      text.setAttribute("text-anchor", "middle");
+      arr.forEach((sp, k) => {
+        const ts = document.createElementNS(NS, "tspan");
+        ts.setAttribute("x", cx); ts.setAttribute("y", top + PAD + (k + 1) * LH - 2);
+        ts.textContent = sp.text;
+        text.appendChild(ts);
+      });
+      el.ownerSVGElement.appendChild(text);
+    });
   }
 
   function colorNote(n, color) {
@@ -930,6 +1038,8 @@ const PIECES = [{"id": "prelude", "title": "Prelude in C major, BWV 846", "compo
     $("autoscroll").addEventListener("change", (e) => { store.set("autoscroll", e.target.checked); if (e.target.checked) followCursor(); });
     $("octave").checked = store.get("octave", false);
     $("octave").addEventListener("change", (e) => store.set("octave", e.target.checked));
+    $("names").checked = store.get("names", true);
+    $("names").addEventListener("change", (e) => { store.set("names", e.target.checked); drawNoteNames(); });
     $("sens").value = store.get("sens2", 6);
     $("sens").addEventListener("change", (e) => store.set("sens2", +e.target.value));
     const zoomTo = (z) => {
@@ -1000,6 +1110,7 @@ const PIECES = [{"id": "prelude", "title": "Prelude in C major, BWV 846", "compo
     if (!S.osmd || !S.ready) return;
     const keep = S.colored.slice();
     S.osmd.render();
+    drawNoteNames();
     S.cursor = S.osmd.cursor;
     S.cursor.show();
     try { S.cursor.update(); } catch (e) {}
